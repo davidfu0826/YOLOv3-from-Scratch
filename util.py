@@ -184,3 +184,12 @@ def bb_iou(box1, box2):
     iou = inter_area / (b1_area + b2_area - inter_area)
     
     return iou
+
+def load_classes(namesfile):
+	"""
+	For reading class names
+
+	"""
+    fp = open(namesfile, "r")
+    names = fp.read().split("\n")[:-1]
+    return names
