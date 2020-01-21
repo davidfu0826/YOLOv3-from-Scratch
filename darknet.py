@@ -1,3 +1,6 @@
+# https://blog.paperspace.com/how-to-implement-a-yolo-v3-object-detector-from-scratch-in-pytorch-part-2/
+# https://blog.paperspace.com/how-to-implement-a-yolo-v3-object-detector-from-scratch-in-pytorch-part-3/
+# https://blog.paperspace.com/how-to-implement-a-yolo-v3-object-detector-from-scratch-in-pytorch-part-4/
 from __future__ import division
 
 import torch
@@ -99,7 +102,7 @@ def create_modules(blocks):
 		# We use Bilinear2dUpsampling
 		elif (x["type"] == "upsample"):
 			stride = int(x["stride"])
-			upsample = nn.Upsample(scale_factor = 2, mode = "bilinear")
+			upsample = nn.Upsample(scale_factor = 2, mode = "bilinear", align_corners=True)
 			module.add_module(f"upsample_{index}", upsample)
 
 		# If it is a route layer
@@ -189,7 +192,7 @@ class Darknet(nn.Module):
 					layers[0] = layers[0] - i
 
 				if len(layers) == 1:
-					x = output[i + (layers[0])]
+					x = outputs[i + (layers[0])]
 
 				else:
 					if (layers[1]) > 0:
@@ -207,8 +210,9 @@ class Darknet(nn.Module):
 			elif module_type == "yolo":
 
 				anchors = self.module_list[i][0].anchors
+
 				# Get the input dimensions
-				inp_dim = int (self.net_info["height"])
+				inp_dim = int (self.net_info["height"]) # Can be configured in .cfg file
 
 				# Get the number of classes
 				num_classes = int (module["classes"])
@@ -226,14 +230,101 @@ class Darknet(nn.Module):
 			outputs[i] = x
 		return detections
 
+	def load_weights(self, weightfile):
+		# Open the weights file
+		fp = open(weightfile, "rb")
+
+		# The first 5 values are header information
+		# 1. Major version number
+		# 2. Minor version number
+		# 3. Subversion number
+		# 4.5. Images seen by the network (during training)
+		header = np.fromfile(fp, dtype = np.int32, count = 5)
+		self.header = torch.from_numpy(header)
+		self.seen = self.header[3]
+
+		weights = np.fromfile(fp, dtype = np.float32)
+
+		ptr = 0 # Keep track where we are in the weights array
+		for i in range(len(self.module_list)):
+			module_type = self.blocks[i + 1]["type"]
+
+			# If module_type is convolutional load weights
+			# Otherwise ignore
+
+			if module_type == "convolutional":
+				model = self.module_list[i]
+				try:
+					batch_normalize = int(self.blocks[i+1]["batch_normalize"])
+				except:
+					batch_normalize = 0
+
+				conv = model[0]
+
+				if (batch_normalize):
+					bn = model[1]
+
+					# Get the number of weights of Batch Norm Layer
+					num_bn_biases = bn.bias.numel()
+
+					# Load the weights
+					bn_biases = torch.from_numpy(weights[ptr:ptr + num_bn_biases])
+					ptr += num_bn_biases
+
+					bn_weights = torch.from_numpy(weights[ptr:ptr + num_bn_biases])
+					ptr += num_bn_biases
+
+					bn_running_mean = torch.from_numpy(weights[ptr:ptr + num_bn_biases])
+					ptr += num_bn_biases
+
+					bn_running_var = torch.from_numpy(weights[ptr:ptr + num_bn_biases])
+					ptr += num_bn_biases
+
+					# Cast the loaded weights into dims of model weights.
+					bn_biases = bn_biases.view_as(bn.bias.data)
+					bn_weights = bn_weights.view_as(bn.weight.data)
+					bn_running_mean = bn_running_mean.view_as(bn.running_mean)
+					bn_running_var = bn_running_var.view_as(bn.running_var)
+
+					# Copy the data to model
+					bn.bias.data.copy_(bn_biases)
+					bn.weight.data.copy_(bn_weights)
+					bn.running_mean.copy_(bn_running_mean)
+					bn.running_var.data.copy_(bn_running_var)
+
+				else:
+					# Number of biases
+					num_biases = conv.bias.numel()
+
+					# Load the weights
+					conv_biases = torch.from_numpy(weights[ptr:ptr + num_biases])
+					ptr += num_biases
+
+					# Reshape the loaded weights according to the dims of the model weights
+					conv_biases = conv_biases.view_as(conv.bias.data)
+
+
+					# Finally copy the data
+					conv.bias.data.copy_(conv_biases)
+
+				# Let us load the weights for the Convolutional layers
+				num_weights = conv.weight.numel()
+
+				# Do the same as above for weights
+				conv_weights = torch.from_numpy(weights[ptr:ptr+num_weights])
+				ptr += num_weights
+
+				conv_weights = conv_weights.view_as(conv.weight.data)
+				conv.weight.data.copy_(conv_weights)
 
 
 
 
 if __name__ == '__main__':
 	model = Darknet("cfg/yolov3.cfg")
+	model.load_weights("yolov3.weights")
 	inp = get_test_input()
-	pred = model(inp, torch.cuda.is_available())
+	pred = model(inp, False)#torch.cuda.is_available())
 	print(pred)
 
 
